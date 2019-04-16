@@ -739,7 +739,40 @@ static void writecp(const char *buf, const size_t buflen)
 	if (cfg.pickraw || !*g_cppath)
 		return;
 
-	FILE *fp = fopen(g_cppath, "w");
+	FILE *fp = fopen(g_cppath, "a");
+
+	if (fp) {
+		fwrite(buf, 1, buflen, fp);
+		fclose(fp);
+	} else
+		printwarn();
+}
+
+/* Removes buflen char(s) from a file */
+static void togglecp(const char *buf, const size_t buflen)
+{
+	if (cfg.pickraw)
+		return;
+
+	if (!g_cppath[0])
+		return;
+
+	FILE *fp = fopen(g_cppath, "a+");
+
+    char c;
+    char read_path[1000];
+    read_path[0] = '\0';
+
+    while((c = fgetc(fp)) != EOF){
+        if (c == '\0'){
+            if (!strcmp(read_path, buf)){
+                //remove from file
+                return;
+            }
+            read_path[0] = '\0';
+        }
+        strcat(read_path, &c);
+    }
 
 	if (fp) {
 		fwrite(buf, 1, buflen, fp);
@@ -758,6 +791,35 @@ static void appendfpath(const char *path, const size_t len)
 	}
 
 	copybufpos += xstrlcpy(pcopybuf + copybufpos, path, len);
+}
+
+inline static bool togglefpath(const char *path, const size_t len)
+{
+	if ((copybufpos >= copybuflen) || ((len + 3) > (copybuflen - copybufpos))) {
+		copybuflen += PATH_MAX;
+		pcopybuf = xrealloc(pcopybuf, copybuflen);
+		if (!pcopybuf)
+			errexit();
+	}
+
+	/* Enabling the following will miss files with newlines */
+	/*
+	 * if (copybufpos)
+	 *	pcopybuf[copybufpos - 1] = '\n';
+	 */
+
+    char *match;
+    for(size_t i=0; i<copybuflen; i++){
+        match = strstr(pcopybuf+i, path);
+        if (match){
+            memcpy(match, match+len, copybuflen-i-len);
+            pcopybuf[copybuflen-len] = '0';
+            copybufpos -= len;
+            return 0;
+        }
+    }
+    copybufpos += xstrlcpy(pcopybuf + copybufpos, path, len);
+    return 1;
 }
 
 /* Write selected file paths to fd, linefeed separated */
@@ -3438,19 +3500,25 @@ nochange:
 			} else {
 				r = mkpath(path, dents[cur].name, newpath);
 
-				if (copybufpos) {
-					resetcpind();
+		//		if (copybufpos) {
+		//			resetcpind();
 
 					/* Keep the copy buf in sync */
-					copybufpos = 0;
-				}
-				appendfpath(newpath, r);
-
-				writecp(newpath, r - 1); /* Truncate NULL from end */
-				spawn(copier, NULL, NULL, NULL, F_NOTRACE);
+		//			copybufpos = 0;
+		//		}
+				//appendfpath(newpath, r);
+				togglefpath(newpath, r);
+                writecp(newpath, r); /* Truncate NULL from end */
+                    //togglecp(newpath, r);
+                spawn(copier, NULL, NULL, NULL, F_NOTRACE);
 			}
 
 			dents[cur].flags |= FILE_COPIED;
+			if (cur < ndents - 1)
+				++cur;
+			else if (ndents)
+				/* Roll over, set cursor to first entry */
+				cur = 0;
 			break;
 		case SEL_COPYMUL:
 			cfg.copymode ^= 1;
